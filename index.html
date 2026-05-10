@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>时光记忆 · Time Library</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              canvas: "#f1e8d6",
+              ink: "#0a0a0a",
+            },
+            fontFamily: {
+              script: ["Caveat", "cursive"],
+              sans: [
+                "PingFang SC",
+                "PingFang TC",
+                "Hiragino Sans GB",
+                "Microsoft YaHei",
+                "system-ui",
+                "sans-serif",
+              ],
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* 375×812 设计稿画布；大屏居中留白 */
+      #stage {
+        width: 375px;
+        min-height: max(812px, 100dvh);
+      }
+      @media (min-width: 420px) {
+        #stage {
+          height: 812px;
+          min-height: 812px;
+          margin-top: 2rem;
+          margin-bottom: 2rem;
+          box-shadow: 0 12px 40px rgba(10, 10, 10, 0.06);
+        }
+      }
+      .fade-hit {
+        transition: opacity 0.28s ease;
+      }
+      .theme-desc--single-line {
+        white-space: nowrap;
+      }
+      .theme-desc--compact {
+        font-size: 14px;
+      }
+      .ios-statusbar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 48px;
+        pointer-events: none;
+        z-index: 20;
+      }
+      .ios-dynamic-island {
+        position: absolute;
+        left: 50%;
+        top: 10px;
+        transform: translateX(-50%);
+        width: 126px;
+        height: 35px;
+        border-radius: 999px;
+        background: #000;
+      }
+      /* 严格透明显示：封面容器不提供底色 */
+      #cover-wrap {
+        background-color: transparent;
+      }
+      #cover-img.cover-img--multiply {
+        mix-blend-mode: multiply;
+      }
+      /* 主题布局 B：第二/三主题视频区 375×282、距顶 178px，贴齐左右；cover 裁切；#cover-img 勿与视频合并选择器以免盖掉 .hidden */
+      #stage[data-layout="b"] #cover-wrap {
+        left: 0;
+        top: 178px;
+        width: 375px;
+        height: 282px;
+        overflow: hidden;
+      }
+      #stage[data-layout="b"] #cover-video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        object-fit: cover;
+        object-position: center center;
+      }
+      #stage[data-layout="b"] #cover-img:not(.hidden) {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        object-fit: cover;
+        object-position: center center;
+      }
+      #stage[data-layout="b"] #theme-title-wrap {
+        left: 0;
+        right: 0;
+        justify-content: center;
+      }
+      /* 全局背景音乐开关：图标文件见下方注释；须用户点击后浏览器才允许出声 */
+      #btn-bg-music {
+        position: absolute;
+        right: 10px;
+        top: 54px;
+        z-index: 35;
+        box-sizing: border-box;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border-radius: 999px;
+        border: 1px solid rgba(10, 10, 10, 0.18);
+        background-color: rgba(241, 232, 214, 0.92);
+        background-image: url("placeholder/icon-bg-music.png?v=3");
+        background-size: 24px 32px;
+        background-position: center;
+        background-repeat: no-repeat;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition: opacity 0.2s ease, border-color 0.2s ease;
+      }
+      #btn-bg-music[aria-pressed="false"] {
+        opacity: 0.48;
+      }
+      #btn-bg-music[aria-pressed="true"] {
+        opacity: 1;
+        border-color: rgba(10, 10, 10, 0.32);
+      }
+    </style>
+  </head>
+  <body
+    class="bg-canvas text-ink min-h-screen flex flex-col items-center justify-start sm:justify-center antialiased"
+  >
+    <!-- 左侧装饰底图（占位，对应稿中 image 30） -->
+    <div
+      class="pointer-events-none fixed inset-y-0 left-0 w-[470px] max-w-[55vw] -translate-x-[95px] opacity-90 hidden sm:block z-0"
+      aria-hidden="true"
+    >
+      <img
+        src="placeholder/bg-side-texture.png"
+        alt=""
+        class="h-full w-full object-cover object-right"
+      />
+    </div>
+
+    <main
+      id="stage"
+      data-layout="default"
+      class="relative z-[1] bg-canvas overflow-x-hidden overflow-y-auto"
+    >
+      <!-- 全局背景音乐：音频见 script 里 BGM_SRC（本地文件或 https 直链均可）；图标 placeholder/icon-bg-music.png -->
+      <audio id="bg-music" loop preload="metadata" playsinline></audio>
+      <button
+        type="button"
+        id="btn-bg-music"
+        aria-label="背景音乐 开/关"
+        aria-pressed="false"
+      >
+        <span class="sr-only">背景音乐 开/关</span>
+      </button>
+
+      <!-- iOS 顶部状态栏 + 灵动岛 -->
+      <div class="ios-statusbar" aria-hidden="true">
+        <div class="ios-dynamic-island"></div>
+      </div>
+
+      <!-- 移动端同稿左侧装饰（随 #stage 高度铺满，避免高于 836px 的视口露底） -->
+      <div
+        class="pointer-events-none absolute inset-y-0 w-[470px] -left-[95px] opacity-90 sm:hidden"
+        aria-hidden="true"
+      >
+        <img
+          src="placeholder/bg-side-texture.png"
+          alt=""
+          class="absolute inset-0 max-w-none size-full object-cover"
+        />
+      </div>
+
+      <!-- Time Library 标题区：稿 79×51 / 185×52 -->
+      <header
+        class="absolute left-[79px] top-[51px] w-[185px] min-h-[52px] h-auto py-0.5 overflow-visible flex items-center justify-center"
+      >
+        <p
+          class="font-script text-[36px] leading-none tracking-wide text-ink lowercase whitespace-nowrap"
+          style="font-weight: 600"
+        >
+          time library
+        </p>
+      </header>
+
+      <!-- 封面插画：稿 -36×152 / 431×323 -->
+      <div
+        class="absolute left-[-36px] top-[152px] w-[431px] h-[323px] fade-hit"
+        id="cover-wrap"
+      >
+        <img
+          id="cover-img"
+          src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+          alt=""
+          class="absolute inset-0 max-w-none size-full object-cover pointer-events-none"
+        />
+        <!-- 某一主题若配置了 coverVideo，则显示视频；poster 用 t.cover，可为空 -->
+        <video
+          id="cover-video"
+          class="absolute inset-0 hidden max-w-none size-full object-cover pointer-events-none"
+          muted
+          playsinline
+          loop
+          preload="metadata"
+          aria-hidden="true"
+        ></video>
+      </div>
+
+      <!-- 主题名称：稿 168×512，20px / leading 20 -->
+      <h1
+        class="absolute left-0 right-0 top-[512px] flex justify-center fade-hit"
+        id="theme-title-wrap"
+      >
+        <span
+          id="theme-title"
+          class="inline-block font-sans font-semibold text-[20px] leading-[20px] h-[24px] text-center text-ink"
+          >出生</span
+        >
+      </h1>
+
+      <!-- 简介：稿 36×551，16px / leading 20 -->
+      <p
+        id="theme-desc"
+        class="absolute left-[36px] right-[36px] top-[551px] font-sans font-normal text-[16px] leading-[20px] text-ink text-center fade-hit px-1"
+      >
+        1969年,你来到了这个世界
+      </p>
+
+      <!-- Last one / Next one：flex 固定行高 93px，两按钮同高对齐 -->
+      <div
+        class="absolute left-0 right-0 top-[640px] flex h-[93px] flex-row items-stretch justify-center gap-2"
+      >
+        <button
+          type="button"
+          id="btn-prev"
+          aria-label="上一个主题 Last one"
+          class="box-border h-full w-[165px] shrink-0 cursor-pointer appearance-none border-0 bg-transparent bg-center bg-no-repeat p-0 outline-none transition-transform select-none focus-visible:ring-2 focus-visible:ring-ink/25 active:scale-[0.98] [background-size:100%_100%]"
+          style="background-image: url('placeholder/btn-prev.png')"
+        ></button>
+        <button
+          type="button"
+          id="btn-next"
+          aria-label="下一个主题 Next one"
+          class="relative -top-[4px] box-border h-full w-[165px] shrink-0 cursor-pointer appearance-none border-0 bg-transparent bg-center bg-no-repeat p-0 outline-none transition-transform select-none focus-visible:ring-2 focus-visible:ring-ink/25 active:scale-[0.98] [background-size:100%_100%]"
+          style="background-image: url('placeholder/btn-next.png')"
+        ></button>
+      </div>
+
+    </main>
+
+    <script>
+      (function () {
+        var themes = [
+          {
+            layout: "b",
+            cover: "",
+            coverVideo: "placeholder/theme-cover-01.mp4?v=5",
+            title: "童年",
+            desc: "1969年,你出生了,从小努力上学读书",
+          },
+          {
+            layout: "b",
+            cover: "placeholder/theme-cover-02.png",
+            /** 视频须为可访问的文件路径，例如 placeholder/theme-cover-02.mp4；勿把标题写进 coverVideo */
+            coverVideo: "placeholder/theme-cover-02.mp4",
+            title: "毕业",
+            desc: "1993年,你从大学毕业了",
+            singleLineDesc: true,
+          },
+          {
+            layout: "b",
+            cover: "placeholder/theme-cover-04.png",
+            coverVideo: "placeholder/theme-cover-04.mp4",
+            title: "工作",
+            desc: "你成为了一名英语老师,执笔讲台",
+          },
+          {
+            layout: "b",
+            cover: "placeholder/theme-cover-03.png",
+            /** 视频文件：placeholder/theme-cover-03.mp4；换源后把 ?v= 数字改大可避免浏览器沿用旧缓存 */
+            coverVideo: "placeholder/theme-cover-03.mp4?v=2",
+            title: "结婚",
+            desc: "1993年,你和他结婚",
+          },
+          {
+            layout: "b",
+            cover: "",
+            coverVideo: "placeholder/theme-cover-05.mp4?v=4",
+            title: "妈妈",
+            desc: "1994年,你成为了一个妈妈",
+          },
+          {
+            layout: "b",
+            cover: "",
+            coverVideo: "placeholder/theme-cover-06.mp4?v=3",
+            title: "妈妈",
+            desc: "孩子带来独特的人生体验,一起成长"
+          },
+          {
+            layout: "b",
+            cover: "",
+            coverVideo: "placeholder/theme-cover-07.mp4?v=2",
+            title: "母女",
+            desc: "也是朋友，更是彼此的后盾",
+          },
+        ];
+
+        var stage = document.getElementById("stage");
+        var coverImg = document.getElementById("cover-img");
+        var coverVideo = document.getElementById("cover-video");
+        var themeTitle = document.getElementById("theme-title");
+        var themeDesc = document.getElementById("theme-desc");
+        var coverWrap = document.getElementById("cover-wrap");
+        var titleWrap = document.getElementById("theme-title-wrap");
+        var pageTitle = document.querySelector("main > header");
+        var btnNext = document.getElementById("btn-next");
+        var btnPrev = document.getElementById("btn-prev");
+        var bgMusic = document.getElementById("bg-music");
+        var btnBgMusic = document.getElementById("btn-bg-music");
+        /**
+         * 背景音乐地址：本地或网络直链均可。
+         * 本地示例：placeholder/bg-music.mp3
+         * 网络示例：https://你的域名或 CDN/文件.mp3（须为浏览器能直接打开的音频直链，不是网页分享页）
+         */
+        var BGM_SRC = "placeholder/bg-music.mp3";
+        var homeEls = [pageTitle, coverWrap, titleWrap, themeDesc, btnNext, btnPrev];
+        var fadeEls = [coverWrap, titleWrap, themeDesc];
+
+        function syncBgMusicButton() {
+          var on = bgMusic && !bgMusic.paused;
+          if (btnBgMusic) {
+            btnBgMusic.setAttribute("aria-pressed", on ? "true" : "false");
+          }
+        }
+
+        if (bgMusic && BGM_SRC) {
+          bgMusic.src = BGM_SRC;
+          bgMusic.volume = 0.45;
+        }
+        if (btnBgMusic && bgMusic) {
+          btnBgMusic.addEventListener("click", function () {
+            if (bgMusic.paused) {
+              bgMusic.play().then(syncBgMusicButton).catch(syncBgMusicButton);
+            } else {
+              bgMusic.pause();
+              syncBgMusicButton();
+            }
+          });
+          bgMusic.addEventListener("play", syncBgMusicButton);
+          bgMusic.addEventListener("pause", syncBgMusicButton);
+        }
+
+        /** 视频失败回退图：须为存在的 png（当前工程无 theme-cover-*.png 时用底纹） */
+        var coverFallback = "placeholder/bg-side-texture.png";
+        var coverFallbackBase = coverFallback.slice(coverFallback.lastIndexOf("/") + 1);
+
+        var currentIndex = -1;
+
+        /** 顺序下一档，末尾回到开头 */
+        function nextIndex() {
+          if (themes.length <= 1) return 0;
+          return (currentIndex + 1) % themes.length;
+        }
+
+        /** 上一档，在开头时回到末尾 */
+        function prevIndex() {
+          if (themes.length <= 1) return 0;
+          return (currentIndex - 1 + themes.length) % themes.length;
+        }
+
+        function fadeOutIn(runUpdate) {
+          fadeEls.forEach(function (el) {
+            el.style.opacity = "0";
+          });
+          window.setTimeout(function () {
+            runUpdate();
+            fadeEls.forEach(function (el) {
+              el.style.opacity = "1";
+            });
+          }, 160);
+        }
+
+        function applyTheme(index) {
+          var t = themes[index];
+          stage.setAttribute("data-layout", t.layout || "default");
+
+          if (t.coverVideo) {
+            coverImg.classList.add("hidden");
+            coverVideo.classList.remove("hidden");
+            coverVideo.poster = t.cover || "";
+            coverVideo.onerror = function () {
+              coverVideo.onerror = null;
+              coverVideo.pause();
+              coverVideo.removeAttribute("src");
+              coverVideo.classList.add("hidden");
+              coverImg.classList.remove("hidden");
+              coverImg.onerror = function () {
+                coverImg.onerror = null;
+                if (coverImg.src.indexOf(coverFallbackBase) === -1) {
+                  coverImg.src = coverFallback;
+                }
+              };
+              coverImg.src = t.cover || coverFallback;
+            };
+            coverVideo.src = t.coverVideo;
+            coverVideo.load();
+            coverVideo.play().catch(function () {});
+          } else {
+            coverVideo.onerror = null;
+            coverVideo.pause();
+            coverVideo.removeAttribute("src");
+            coverVideo.removeAttribute("poster");
+            coverVideo.classList.add("hidden");
+            coverImg.classList.remove("hidden");
+            coverImg.onerror = function () {
+              coverImg.onerror = null;
+              if (coverImg.src.indexOf(coverFallbackBase) === -1) {
+                coverImg.src = coverFallback;
+              }
+            };
+            coverImg.src = t.cover;
+          }
+          coverImg.alt = t.title;
+
+          if (t.multiplyBlend && !t.coverVideo) {
+            coverImg.classList.add("cover-img--multiply");
+          } else {
+            coverImg.classList.remove("cover-img--multiply");
+          }
+          if (t.singleLineDesc) {
+            themeDesc.classList.add("theme-desc--single-line", "theme-desc--compact");
+          } else {
+            themeDesc.classList.remove(
+              "theme-desc--single-line",
+              "theme-desc--compact"
+            );
+          }
+          themeTitle.textContent = t.title;
+          themeDesc.textContent = t.desc;
+          currentIndex = index;
+        }
+
+        function showNextTheme() {
+          var idx = nextIndex();
+          fadeOutIn(function () {
+            applyTheme(idx);
+          });
+        }
+
+        function showPrevTheme() {
+          var idx = prevIndex();
+          fadeOutIn(function () {
+            applyTheme(idx);
+          });
+        }
+
+        btnNext.addEventListener("click", showNextTheme);
+        btnPrev.addEventListener("click", showPrevTheme);
+
+        /* 进入首页：固定为第一项主题；之后「下一个主题」按 themes 数组顺序循环 */
+        applyTheme(0);
+      })();
+    </script>
+  </body>
+</html>
